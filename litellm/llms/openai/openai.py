@@ -438,7 +438,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
             )
 
-            verbose_proxy_logger.info(f"make_openai_chat_completion_request() - raw_response: {raw_response}")
+            verbose_proxy_logger.info(f"make_openai_chat_completion_request() - raw_response: {raw_response.text}")
 
             end_time = time.time()
 

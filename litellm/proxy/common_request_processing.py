@@ -345,7 +345,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
-    async def git(
+    async def base_process_llm_request(
         self,
         request: Request,
         fastapi_response: Response,
