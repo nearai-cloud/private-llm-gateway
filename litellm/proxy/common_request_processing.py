@@ -436,6 +436,8 @@ class ProxyBaseLLMRequestProcessing:
 
         response = responses[1]
 
+        verbose_proxy_logger.debug("LLM response: {}".format(response))
+
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""
         cache_key = hidden_params.get("cache_key", None) or ""
