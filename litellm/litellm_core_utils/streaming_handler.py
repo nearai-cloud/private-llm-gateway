@@ -34,6 +34,7 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
+from litellm._logging import verbose_proxy_logger
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE = "audio"
@@ -439,6 +440,8 @@ class CustomStreamWrapper:
             finish_reason = None
             logprobs = None
             usage = None
+
+            verbose_proxy_logger.info(f"handle_openai_chat_completion_chunk - chunk: {chunk}")
 
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
@@ -1735,6 +1738,9 @@ class CustomStreamWrapper:
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
             self.completion_stream = self.make_call(client=litellm.module_level_client)
+
+            verbose_proxy_logger.info(f"fetch_sync_stream: {self.completion_stream}")
+
             self._stream_iter = self.completion_stream.__iter__()
 
         return self.completion_stream
@@ -1745,6 +1751,9 @@ class CustomStreamWrapper:
             self.completion_stream = await self.make_call(
                 client=litellm.module_level_aclient
             )
+
+            verbose_proxy_logger.info(f"fetch_stream: {self.completion_stream}")
+
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream

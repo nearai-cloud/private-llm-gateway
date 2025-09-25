@@ -3110,10 +3110,10 @@ class ProxyConfig:
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
-            for guardrail in guardrails_in_db:
-                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-                    guardrail=cast(Guardrail, guardrail),
-                )
+            # for guardrail in guardrails_in_db:
+            #     IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+            #         guardrail=cast(Guardrail, guardrail),
+            #     )
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(

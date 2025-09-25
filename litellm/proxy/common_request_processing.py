@@ -345,7 +345,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
-    async def base_process_llm_request(
+    async def git(
         self,
         request: Request,
         fastapi_response: Response,
@@ -436,7 +436,7 @@ class ProxyBaseLLMRequestProcessing:
 
         response = responses[1]
 
-        verbose_proxy_logger.debug("LLM response: {}".format(response))
+        verbose_proxy_logger.info("LLM response: {}".format(response))
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
         model_id = hidden_params.get("model_id", None) or ""

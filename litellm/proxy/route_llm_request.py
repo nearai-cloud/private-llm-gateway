@@ -1,8 +1,12 @@
 from typing import TYPE_CHECKING, Any, Literal, Optional
+import logging
 
 from fastapi import HTTPException, status
 
 import litellm
+
+from litellm._logging import verbose_proxy_logger
+logger = verbose_proxy_logger
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -89,18 +93,26 @@ async def route_request(
     team_id = get_team_id_from_data(data)
     router_model_names = llm_router.model_names if llm_router is not None else []
 
+    logger.info(f"[route_llm_request] route_type: {route_type}, team_id: {team_id}, user_model: {user_model}, llm_router: {'present' if llm_router else 'none'}")
+
     # Preprocess Google GenAI generate content requests
     if route_type in ["agenerate_content", "agenerate_content_stream"]:
+        logger.info(f"[route_llm_request] Branch: Google GenAI preprocess for {route_type}")
         # Map generationConfig to config parameter for Google GenAI compatibility
         if "generationConfig" in data and "config" not in data:
+            logger.info("[route_llm_request] Mapping generationConfig to config")
             data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
+        logger.info("[route_llm_request] Branch: api_key/api_base in data")
         if llm_router is not None:
+            logger.info("[route_llm_request] Using llm_router for api_key/api_base")
             return getattr(llm_router, f"{route_type}")(**data)
         else:
+            logger.info("[route_llm_request] Using litellm for api_key/api_base")
             return getattr(litellm, f"{route_type}")(**data)
 
     elif "user_config" in data:
+        logger.info("[route_llm_request] Branch: user_config in data")
         router_config = data.pop("user_config")
         user_router = litellm.Router(**router_config)
         ret_val = getattr(user_router, f"{route_type}")(**data)
@@ -113,18 +125,23 @@ async def route_request(
         and "," in data.get("model", "")
         and llm_router is not None
     ):
+        logger.info("[route_llm_request] Branch: acompletion with multiple models")
         if data.get("fastest_response", False):
+            logger.info("[route_llm_request] acompletion: fastest_response=True")
             return llm_router.abatch_completion_fastest_response(**data)
         else:
+            logger.info("[route_llm_request] acompletion: fastest_response=False, using abatch_completion")
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
     elif llm_router is not None:
+        logger.info("[route_llm_request] Branch: llm_router is not None")
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
             if team_id is not None
             else None
         )
         if team_model_name is not None:
+            logger.info(f"[route_llm_request] team_model_name mapped: {team_model_name}")
             data["model"] = team_model_name
             return getattr(llm_router, f"{route_type}")(**data)
 
@@ -132,26 +149,32 @@ async def route_request(
             data["model"] in router_model_names
             or data["model"] in llm_router.get_model_ids()
         ):
+            logger.info(f"[route_llm_request] model in router_model_names or get_model_ids: {data['model']}")
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif (
             llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):
+            logger.info(f"[route_llm_request] model in model_group_alias: {data['model']}")
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] in llm_router.deployment_names:
+            logger.info(f"[route_llm_request] model in deployment_names: {data['model']}")
             return getattr(llm_router, f"{route_type}")(
                 **data, specific_deployment=True
             )
 
         elif data["model"] not in router_model_names:
+            logger.info(f"[route_llm_request] model not in router_model_names: {data['model']}")
             if llm_router.router_general_settings.pass_through_all_models:
+                logger.info("[route_llm_request] pass_through_all_models=True, using litellm")
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
                 llm_router.default_deployment is not None
                 or len(llm_router.pattern_router.patterns) > 0
             ):
+                logger.info("[route_llm_request] default_deployment or pattern_router.patterns present")
                 return getattr(llm_router, f"{route_type}")(**data)
             elif route_type in [
                 "amoderation",
@@ -162,15 +185,19 @@ async def route_request(
                 "avector_store_create",
                 "avector_store_search",
             ]:
+                logger.info(f"[route_llm_request] route_type {route_type} does not require model")
                 # moderation endpoint does not require `model` parameter
                 return getattr(llm_router, f"{route_type}")(**data)
 
     elif user_model is not None:
+        logger.info("[route_llm_request] Branch: user_model is not None")
         return getattr(litellm, f"{route_type}")(**data)
     elif route_type == "allm_passthrough_route":
+        logger.info("[route_llm_request] Branch: allm_passthrough_route")
         return getattr(litellm, f"{route_type}")(**data)
 
     # if no route found then it's a bad request
+    logger.error(f"[route_llm_request] No route found for route_type={route_type}, model={data.get('model', '')}")
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)
     raise ProxyModelNotFoundError(
         route=route_name,

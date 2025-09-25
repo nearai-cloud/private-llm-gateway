@@ -118,7 +118,7 @@ from litellm.utils import (
     validate_chat_completion_tool_choice,
 )
 
-from ._logging import verbose_logger
+from ._logging import verbose_logger, verbose_proxy_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
@@ -474,11 +474,11 @@ async def acompletion(
 
     # Log shared session usage
     if shared_session is not None:
-        verbose_logger.debug(
+        verbose_proxy_logger.info(
             f"🔄 SHARED SESSION: acompletion called with shared_session (ID: {id(shared_session)})"
         )
     else:
-        verbose_logger.debug(
+        verbose_proxy_logger.info(
             "🔄 NO SHARED SESSION: acompletion called without shared_session"
         )
 
@@ -564,6 +564,7 @@ async def acompletion(
         func_with_context = partial(ctx.run, func)
 
         init_response = await loop.run_in_executor(None, func_with_context)
+        verbose_proxy_logger.info(f"main - acompletion - init_response: {init_response}")
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
         ):  ## CACHING SCENARIO
@@ -2079,6 +2080,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         client=client,
                         provider_config=provider_config,
                     )
+                    verbose_proxy_logger.info(f"main - completion - openai-like - base_llm_http_handler: {response}")
                 else:
                     response = openai_chat_completions.completion(
                         model=model,
@@ -2100,6 +2102,7 @@ def completion(  # type: ignore # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         shared_session=shared_session,
                     )
+                    verbose_proxy_logger.info(f"main - completion - openai-like - openai_chat_completions.completion: {response}")
             except Exception as e:
                 ## LOGGING - log the original exception returned
                 logging.post_call(
