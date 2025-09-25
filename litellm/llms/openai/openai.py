@@ -24,6 +24,7 @@ import openai
 from openai import AsyncOpenAI, OpenAI
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
+from openai._legacy_response import LegacyAPIResponse
 from pydantic import BaseModel
 from typing_extensions import overload
 
@@ -424,7 +425,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
-    ) -> Tuple[dict, BaseModel, str]:
+    ) -> Tuple[dict, BaseModel, LegacyAPIResponse]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
@@ -438,7 +439,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
             )
 
-            verbose_proxy_logger.info(f"make_openai_chat_completion_request() - raw_response: {raw_response.text}")
+            verbose_proxy_logger.info(f"make_openai_chat_completion_request() - raw_response: {raw_response}")
 
             end_time = time.time()
 
@@ -450,7 +451,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             verbose_proxy_logger.info(f"make_openai_chat_completion_request() - response: {response}")
 
-            return headers, response, raw_response.text
+            return headers, response, raw_response
         except openai.APITimeoutError as e:
             end_time = time.time()
             time_delta = round(end_time - start_time, 2)
@@ -466,7 +467,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         data: dict,
         timeout: Union[float, httpx.Timeout],
         logging_obj: LiteLLMLoggingObj,
-    ) -> Tuple[dict, BaseModel]:
+    ) -> Tuple[dict, BaseModel, LegacyAPIResponse]:
         """
         Helper to:
         - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
@@ -485,7 +486,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
-            return headers, response
+            return headers, response, raw_response
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
@@ -678,6 +679,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         (
                             headers,
                             response,
+                            raw_response,
                         ) = self.make_sync_openai_chat_completion_request(
                             openai_client=openai_client,
                             data=data,
@@ -697,6 +699,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         final_response_obj = convert_to_model_response_object(
                             response_object=stringified_response,
                             model_response_object=model_response,
+                            hidden_params={"headers": headers, "raw_response_text": raw_response.text},
                             _response_headers=headers,
                         )
                         if fake_stream is True:
@@ -828,7 +831,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     },
                 )
 
-                headers, response, raw_response_text = await self.make_openai_chat_completion_request(
+                headers, response, raw_response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient,
                     data=data,
                     timeout=timeout,
@@ -848,7 +851,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 final_response_obj = convert_to_model_response_object(
                     response_object=stringified_response,
                     model_response_object=model_response,
-                    hidden_params={"headers": headers, "raw_response_text": raw_response_text},
+                    hidden_params={"headers": headers, "raw_response_text": raw_response.text},
                     _response_headers=headers,
                 )
 
@@ -925,7 +928,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 "complete_input_dict": data,
             },
         )
-        headers, response = self.make_sync_openai_chat_completion_request(
+        headers, response, raw_response = self.make_sync_openai_chat_completion_request(
             openai_client=openai_client,
             data=data,
             timeout=timeout,

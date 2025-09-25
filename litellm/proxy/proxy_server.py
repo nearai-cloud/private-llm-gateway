@@ -4115,12 +4115,21 @@ async def chat_completion(  # noqa: PLR0915
                 getattr(result, "_hidden_params", {}) or {}
             )
             raw_response_text = hidden_params.get("raw_response_text", None)
+            verbose_proxy_logger.info(
+                f"chat_completion() - raw_response_text: {raw_response_text}"
+            )
             if raw_response_text is not None:
+                verbose_proxy_logger.info(
+                    f"chat_completion() - non-streaming ModelResponse raw_response_text: {result}"
+                )
                 try:
                     return json.loads(raw_response_text)
                 except Exception:
                     return {}
             else:
+                verbose_proxy_logger.info(
+                    f"chat_completion() - non-streaming ModelResponse model_dump: {result}"
+                )
                 return result.model_dump(exclude_none=True, exclude_unset=True)
         elif isinstance(result, BaseModel):
             return result.model_dump(exclude_none=True, exclude_unset=True)
