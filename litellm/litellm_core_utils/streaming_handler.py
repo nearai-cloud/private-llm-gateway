@@ -73,7 +73,9 @@ def print_verbose(print_statement):
 
 
 class CustomAsyncStream(AsyncStream[Tuple[Any, _T]]):
-    """Custom implementation of an asynchronous stream response."""
+    """
+    Custom implementation of an asynchronous stream response. Extends [AsyncStream](https://github.com/openai/openai-python/blob/7aa3c787b99adf9b93f0652aacafa1200c681877/src/openai/_streaming.py#L123) to return raw SSE data together with processed data.
+    """
 
     def __init__(
         self,
@@ -1904,8 +1906,9 @@ class CustomStreamWrapper:
                     verbose_proxy_logger.info(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
-                    if processed_chunk is None:
-                        continue
+                    if processed_chunk is None and raw_chunk is not None:
+                        # return raw chunk even if the processed chunk is empty
+                        return raw_chunk
 
                     if self.logging_obj.completion_start_time is None:
                         self.logging_obj._update_completion_start_time(
@@ -1936,7 +1939,6 @@ class CustomStreamWrapper:
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )
-
                         if is_empty:
                             continue
                     verbose_proxy_logger.info(f"final returned processed chunk: {processed_chunk}")
@@ -1945,6 +1947,9 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
+
+                    verbose_proxy_logger.info(f"RETURNING CHUNK - raw_chunk: {raw_chunk}")
+
                     return raw_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -1979,6 +1984,9 @@ class CustomStreamWrapper:
                         )
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
+
+                        verbose_proxy_logger.info(f"RETURNING CHUNK - processed_chunk - 1: {processed_chunk}")
+
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
@@ -2006,6 +2014,9 @@ class CustomStreamWrapper:
                     )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
+
+                    verbose_proxy_logger.info(f"RETURNING CHUNK - response: {response}")
+
                     return response
 
                 asyncio.create_task(
@@ -2025,11 +2036,12 @@ class CustomStreamWrapper:
                     end_time=None,
                 )
 
-                raise StopAsyncIteration  # Re-raise StopIteration
-            else:
-                self.sent_last_chunk = True
-                processed_chunk = self.finish_reason_handler()
-                return processed_chunk
+            raise StopAsyncIteration  # Re-raise StopIteration
+            # else:
+                ## SKIP: now we return the raw last chunk instead
+                # self.sent_last_chunk = True
+                # processed_chunk = self.finish_reason_handler()
+                # return processed_chunk
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT
