@@ -1050,10 +1050,8 @@ class Router:
                     kwargs=kwargs,
                 )
             if request_priority is not None and isinstance(request_priority, int):
-                verbose_router_logger.info(f"[router::acompletion] Scheduling request with priority {request_priority}")
                 response = await self.schedule_acompletion(**kwargs)
             else:
-                verbose_router_logger.info(f"[router::acompletion] async call without scheduling")
                 response = await self.async_function_with_fallbacks(**kwargs)
             end_time = time.time()
             _duration = end_time - start_time
@@ -3958,7 +3956,7 @@ class Router:
 
     @tracer.wrap()
     async def async_function_with_retries(self, *args, **kwargs):  # noqa: PLR0915
-        verbose_router_logger.info("Inside async function with retries.")
+        verbose_router_logger.debug("Inside async function with retries.")
         original_function = kwargs.pop("original_function")
         fallbacks = kwargs.pop("fallbacks", self.fallbacks)
         parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
@@ -3978,7 +3976,7 @@ class Router:
             if model_list is not None:
                 _metadata.update({"model_group_size": len(model_list)})
 
-        verbose_router_logger.info(
+        verbose_router_logger.debug(
             f"async function w/ retries: original_function - {original_function}, num_retries - {num_retries}"
         )
         try:
