@@ -28,6 +28,11 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from openai._streaming import AsyncStream, ServerSentEvent
+from openai._client import AsyncOpenAI
+from openai._exceptions import APIError
+from openai._utils import is_mapping
+from typing import Any, TypeVar, Iterator, AsyncIterator, cast, Tuple
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
@@ -35,6 +40,9 @@ from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
 from litellm._logging import verbose_proxy_logger
+
+_T = TypeVar("_T")
+
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE = "audio"
@@ -64,6 +72,95 @@ def print_verbose(print_statement):
         pass
 
 
+class CustomAsyncStream(AsyncStream[Tuple[Any, _T]]):
+    """Custom implementation of an asynchronous stream response."""
+
+    def __init__(
+        self,
+        *,
+        cast_to: type[_T],
+        response: httpx.Response,
+        client: AsyncOpenAI,
+    ) -> None:
+        self.response = response
+        self._cast_to = cast_to
+        self._client = client
+        self._decoder = client._make_sse_decoder()
+        self._iterator = self.__stream__()
+
+    @staticmethod
+    def from_async_stream(
+        stream: AsyncStream[_T],
+    ):
+        return CustomAsyncStream(
+            cast_to=stream._cast_to,
+            response=stream.response,
+            client=stream._client,
+        )
+
+    async def __anext__(self) -> Tuple[Any, _T]:
+        return await self._iterator.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[Tuple[Any, _T]]:
+        return self
+
+    async def _iter_events(self) -> AsyncIterator[ServerSentEvent]:
+        async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):
+            yield sse
+
+    async def __stream__(self) -> AsyncIterator[Tuple[Any, _T]]:
+        cast_to = cast(Any, self._cast_to)
+        response = self.response
+        process_data = self._client._process_response_data
+        iterator = self._iter_events()
+
+        async for sse in iterator:
+            if sse.data.startswith("[DONE]"):
+                break
+
+            # we have to special case the Assistants `thread.` events since we won't have an "event" key in the data
+            if sse.event and sse.event.startswith("thread."):
+                data = sse.json()
+
+                if sse.event == "error" and is_mapping(data) and data.get("error"):
+                    message = None
+                    error = data.get("error")
+                    if is_mapping(error):
+                        message = error.get("message")
+                    if not message or not isinstance(message, str):
+                        message = "An error occurred during streaming"
+
+                    raise APIError(
+                        message=message,
+                        request=self.response.request,
+                        body=data["error"],
+                    )
+
+                yield (data, process_data(data={"data": data, "event": sse.event}, cast_to=cast_to, response=response))
+            else:
+                data = sse.json()
+                if is_mapping(data) and data.get("error"):
+                    message = None
+                    error = data.get("error")
+                    if is_mapping(error):
+                        message = error.get("message")
+                    if not message or not isinstance(message, str):
+                        message = "An error occurred during streaming"
+
+                    raise APIError(
+                        message=message,
+                        request=self.response.request,
+                        body=data["error"],
+                    )
+
+                yield (data, process_data(data=data, cast_to=cast_to, response=response))
+
+        # Ensure the entire stream is consumed
+        async for _sse in iterator:
+            ...
+
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -79,7 +176,10 @@ class CustomStreamWrapper:
         self.make_call = make_call
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
-        self.completion_stream = completion_stream
+        verbose_proxy_logger.info(f"completion stream: {completion_stream} - {dir(completion_stream)}")
+        self.completion_stream = CustomAsyncStream.from_async_stream(
+            completion_stream
+        ) if hasattr(completion_stream, "__stream__") else completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
 
@@ -611,6 +711,8 @@ class CustomStreamWrapper:
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
     ):
+        verbose_proxy_logger.info(f"model_response_creator - Creating model response from chunk: {chunk}")
+
         _model = self.model
         _received_llm_provider = self.custom_llm_provider
         _logging_obj_llm_provider = self.logging_obj.model_call_details.get("custom_llm_provider", None)  # type: ignore
@@ -1027,6 +1129,8 @@ class CustomStreamWrapper:
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
+        verbose_proxy_logger.info(f"chunk_creator - Processing chunk: {chunk}")
+
         if hasattr(chunk, 'id'):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
@@ -1316,6 +1420,7 @@ class CustomStreamWrapper:
                         )
                     self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj.get("original_chunk", None) is not None:
+                    verbose_proxy_logger.info(f"original_chunk: {chunk}")
                     if hasattr(response_obj["original_chunk"], "id"):
                         model_response = self.set_model_id(
                             response_obj["original_chunk"].id, model_response
@@ -1606,14 +1711,19 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
+
+                verbose_proxy_logger.info(
+                    f"__next__(): {chunk}; custom_llm_provider: {self.custom_llm_provider}"
+                )
+
                 if chunk is not None and chunk != b"":
-                    print_verbose(
+                    verbose_proxy_logger.info(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
                     response: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
-                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
+                    verbose_proxy_logger.info(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
                     if response is None:
                         continue
@@ -1769,8 +1879,12 @@ class CustomStreamWrapper:
             if self.completion_stream is None:
                 await self.fetch_stream()
 
+            verbose_proxy_logger.info(
+                f"__anext__(): self.completion_stream {self.completion_stream}; custom_llm_provider: {self.custom_llm_provider}"
+            )
+
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:
+                async for raw_chunk, chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
@@ -1782,14 +1896,14 @@ class CustomStreamWrapper:
                         continue
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
-                    verbose_logger.debug(
+                    verbose_proxy_logger.info(
                         f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}"
                     )
 
                     processed_chunk: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
-                    verbose_logger.debug(
+                    verbose_proxy_logger.info(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
                     if processed_chunk is None:
@@ -1827,13 +1941,13 @@ class CustomStreamWrapper:
 
                         if is_empty:
                             continue
-                    print_verbose(f"final returned processed chunk: {processed_chunk}")
+                    verbose_proxy_logger.info(f"final returned processed chunk: {processed_chunk}")
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
-                    return processed_chunk
+                    return raw_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms

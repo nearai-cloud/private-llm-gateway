@@ -1003,7 +1003,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
                 verbose_proxy_logger.info(f"OpenAIChatCompletion - async_streaming() - data: {data}")
 
-                headers, response, raw_response_text = await self.make_openai_chat_completion_request(
+                headers, response, raw_response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient,
                     data=data,
                     timeout=timeout,
