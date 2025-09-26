@@ -136,7 +136,7 @@ class CustomAsyncStream(AsyncStream[Tuple[Any, _T]]):
                         body=data["error"],
                     )
 
-                yield (data, process_data(data={"data": data, "event": sse.event}, cast_to=cast_to, response=response))
+                yield (sse.data, process_data(data={"data": data, "event": sse.event}, cast_to=cast_to, response=response))
             else:
                 data = sse.json()
                 if is_mapping(data) and data.get("error"):
@@ -153,7 +153,7 @@ class CustomAsyncStream(AsyncStream[Tuple[Any, _T]]):
                         body=data["error"],
                     )
 
-                yield (data, process_data(data=data, cast_to=cast_to, response=response))
+                yield (sse.data, process_data(data=data, cast_to=cast_to, response=response))
 
         # Ensure the entire stream is consumed
         async for _sse in iterator:
@@ -711,8 +711,6 @@ class CustomStreamWrapper:
     def model_response_creator(
         self, chunk: Optional[dict] = None, hidden_params: Optional[dict] = None
     ):
-        verbose_proxy_logger.info(f"model_response_creator - Creating model response from chunk: {chunk}")
-
         _model = self.model
         _received_llm_provider = self.custom_llm_provider
         _logging_obj_llm_provider = self.logging_obj.model_call_details.get("custom_llm_provider", None)  # type: ignore
