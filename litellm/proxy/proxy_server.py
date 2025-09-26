@@ -4119,8 +4119,13 @@ async def chat_completion(  # noqa: PLR0915
             if raw_response_text is not None:
                 try:
                     return json.loads(raw_response_text)
-                except Exception:
-                    return {}
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": f"Invalid raw response from model: {raw_response_text}"
+                        },
+                    ) from e
             else:
                 return result.model_dump(exclude_none=True, exclude_unset=True)
         elif isinstance(result, BaseModel):

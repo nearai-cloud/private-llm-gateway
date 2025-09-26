@@ -179,7 +179,7 @@ class CustomStreamWrapper:
         self.logging_obj: LiteLLMLoggingObject = logging_obj
         self.completion_stream = CustomAsyncStream.from_async_stream(
             completion_stream
-        ) if hasattr(completion_stream, "__stream__") else completion_stream
+        ) if isinstance(completion_stream, AsyncStream) else completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
 
@@ -1863,7 +1863,14 @@ class CustomStreamWrapper:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for raw_chunk, chunk in self.completion_stream:
+                async for item in self.completion_stream:
+                    if isinstance(item, tuple):
+                        if len(item) == 2:
+                            raw_chunk, chunk = item
+                        else:
+                            raw_chunk, chunk = None, item[0]
+                    else:
+                        raw_chunk, chunk = None, item
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
@@ -1963,6 +1970,7 @@ class CustomStreamWrapper:
                         )
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
+                        # We don't need to return the raw chunk since we only fix response hash for async streaming
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
