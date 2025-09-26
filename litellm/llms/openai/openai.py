@@ -30,7 +30,7 @@ from typing_extensions import overload
 
 import litellm
 from litellm import LlmProviders
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -438,9 +438,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                     **data, timeout=timeout
                 )
             )
-
-            verbose_proxy_logger.info(f"make_openai_chat_completion_request() - raw_response: {raw_response}")
-
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):
@@ -448,9 +445,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             else:
                 headers = {}
             response = raw_response.parse()
-
-            verbose_proxy_logger.info(f"make_openai_chat_completion_request() - response: {response}")
-
             return headers, response, raw_response
         except openai.APITimeoutError as e:
             end_time = time.time()
@@ -478,8 +472,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             raw_response = openai_client.chat.completions.with_raw_response.create(
                 **data, timeout=timeout
             )
-
-            verbose_proxy_logger.info(f"make_sync_openai_chat_completion_request - raw response: {raw_response}")
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)
@@ -839,8 +831,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 )
                 stringified_response = response.model_dump()
 
-                verbose_proxy_logger.info(f"OpenAIChatCompletion - acompletion - stringified_response: {stringified_response}")
-
                 logging_obj.post_call(
                     input=data["messages"],
                     api_key=api_key,
@@ -1000,8 +990,6 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         "complete_input_dict": data,
                     },
                 )
-
-                verbose_proxy_logger.info(f"OpenAIChatCompletion - async_streaming() - data: {data}")
 
                 headers, response, raw_response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient,

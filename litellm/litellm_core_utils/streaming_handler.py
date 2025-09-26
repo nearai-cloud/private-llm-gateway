@@ -39,7 +39,6 @@ from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
-from litellm._logging import verbose_proxy_logger
 
 _T = TypeVar("_T")
 
@@ -178,7 +177,6 @@ class CustomStreamWrapper:
         self.make_call = make_call
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
-        verbose_proxy_logger.info(f"completion stream: {completion_stream} - {dir(completion_stream)}")
         self.completion_stream = CustomAsyncStream.from_async_stream(
             completion_stream
         ) if hasattr(completion_stream, "__stream__") else completion_stream
@@ -542,8 +540,6 @@ class CustomStreamWrapper:
             finish_reason = None
             logprobs = None
             usage = None
-
-            verbose_proxy_logger.info(f"handle_openai_chat_completion_chunk - chunk: {chunk}")
 
             if str_line and str_line.choices and len(str_line.choices) > 0:
                 if (
@@ -1129,8 +1125,6 @@ class CustomStreamWrapper:
         return
 
     def chunk_creator(self, chunk: Any):  # type: ignore  # noqa: PLR0915
-        verbose_proxy_logger.info(f"chunk_creator - Processing chunk: {chunk}")
-
         if hasattr(chunk, 'id'):
             self.response_id = chunk.id
         model_response = self.model_response_creator()
@@ -1420,7 +1414,6 @@ class CustomStreamWrapper:
                         )
                     self.received_finish_reason = response_obj["finish_reason"]
                 if response_obj.get("original_chunk", None) is not None:
-                    verbose_proxy_logger.info(f"original_chunk: {chunk}")
                     if hasattr(response_obj["original_chunk"], "id"):
                         model_response = self.set_model_id(
                             response_obj["original_chunk"].id, model_response
@@ -1712,18 +1705,14 @@ class CustomStreamWrapper:
                 else:
                     chunk = next(self.completion_stream)
 
-                verbose_proxy_logger.info(
-                    f"__next__(): {chunk}; custom_llm_provider: {self.custom_llm_provider}"
-                )
-
                 if chunk is not None and chunk != b"":
-                    verbose_proxy_logger.info(
+                    print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
                     )
                     response: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
-                    verbose_proxy_logger.info(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
+                    print_verbose(f"PROCESSED CHUNK POST CHUNK CREATOR: {response}")
 
                     if response is None:
                         continue
@@ -1848,9 +1837,6 @@ class CustomStreamWrapper:
         if self.completion_stream is None and self.make_call is not None:
             # Call make_call to get the completion stream
             self.completion_stream = self.make_call(client=litellm.module_level_client)
-
-            verbose_proxy_logger.info(f"fetch_sync_stream: {self.completion_stream}")
-
             self._stream_iter = self.completion_stream.__iter__()
 
         return self.completion_stream
@@ -1861,9 +1847,6 @@ class CustomStreamWrapper:
             self.completion_stream = await self.make_call(
                 client=litellm.module_level_aclient
             )
-
-            verbose_proxy_logger.info(f"fetch_stream: {self.completion_stream}")
-
             self._stream_iter = self.completion_stream.__aiter__()
 
         return self.completion_stream
@@ -1879,10 +1862,6 @@ class CustomStreamWrapper:
             if self.completion_stream is None:
                 await self.fetch_stream()
 
-            verbose_proxy_logger.info(
-                f"__anext__(): self.completion_stream {self.completion_stream}; custom_llm_provider: {self.custom_llm_provider}"
-            )
-
             if is_async_iterable(self.completion_stream):
                 async for raw_chunk, chunk in self.completion_stream:
                     if chunk == "None" or chunk is None:
@@ -1896,19 +1875,22 @@ class CustomStreamWrapper:
                         continue
                     # chunk_creator() does logging/stream chunk building. We need to let it know its being called in_async_func, so we don't double add chunks.
                     # __anext__ also calls async_success_handler, which does logging
-                    verbose_proxy_logger.info(
+                    verbose_logger.debug(
                         f"PROCESSED ASYNC CHUNK PRE CHUNK CREATOR: {chunk}"
                     )
 
                     processed_chunk: Optional[ModelResponseStream] = self.chunk_creator(
                         chunk=chunk
                     )
-                    verbose_proxy_logger.info(
+                    verbose_logger.debug(
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
-                    if processed_chunk is None and raw_chunk is not None:
+                    if processed_chunk is None:
                         # return raw chunk even if the processed chunk is empty
-                        return raw_chunk
+                        if raw_chunk is not None:
+                            return raw_chunk
+                        else:
+                            continue
 
                     if self.logging_obj.completion_start_time is None:
                         self.logging_obj._update_completion_start_time(
@@ -1941,15 +1923,12 @@ class CustomStreamWrapper:
                         )
                         if is_empty:
                             continue
-                    verbose_proxy_logger.info(f"final returned processed chunk: {processed_chunk}")
+                    print_verbose(f"final returned processed chunk: {processed_chunk}")
 
                     # add usage as hidden param
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
-
-                    verbose_proxy_logger.info(f"RETURNING CHUNK - raw_chunk: {raw_chunk}")
-
                     return raw_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
@@ -1984,9 +1963,6 @@ class CustomStreamWrapper:
                         )
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
-
-                        verbose_proxy_logger.info(f"RETURNING CHUNK - processed_chunk - 1: {processed_chunk}")
-
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
@@ -2014,9 +1990,6 @@ class CustomStreamWrapper:
                     )
                 if self.sent_stream_usage is False and self.send_stream_usage is True:
                     self.sent_stream_usage = True
-
-                    verbose_proxy_logger.info(f"RETURNING CHUNK - response: {response}")
-
                     return response
 
                 asyncio.create_task(

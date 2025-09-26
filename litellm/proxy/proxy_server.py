@@ -3110,12 +3110,13 @@ class ProxyConfig:
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
             )
-            # for guardrail in guardrails_in_db:
-            #     IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
-            #         guardrail=cast(Guardrail, guardrail),
-            #     )
+            for guardrail in guardrails_in_db:
+                IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                    guardrail=cast(Guardrail, guardrail),
+                )
         except Exception as e:
-            verbose_proxy_logger.exception(
+            # ignore guardrail initialization errors for now
+            verbose_proxy_logger.debug(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(
                     str(e)
                 )
@@ -4115,21 +4116,12 @@ async def chat_completion(  # noqa: PLR0915
                 getattr(result, "_hidden_params", {}) or {}
             )
             raw_response_text = hidden_params.get("raw_response_text", None)
-            verbose_proxy_logger.info(
-                f"chat_completion() - raw_response_text: {raw_response_text}"
-            )
             if raw_response_text is not None:
-                verbose_proxy_logger.info(
-                    f"chat_completion() - non-streaming ModelResponse raw_response_text: {result}"
-                )
                 try:
                     return json.loads(raw_response_text)
                 except Exception:
                     return {}
             else:
-                verbose_proxy_logger.info(
-                    f"chat_completion() - non-streaming ModelResponse model_dump: {result}"
-                )
                 return result.model_dump(exclude_none=True, exclude_unset=True)
         elif isinstance(result, BaseModel):
             return result.model_dump(exclude_none=True, exclude_unset=True)
