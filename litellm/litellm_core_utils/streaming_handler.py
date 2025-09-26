@@ -28,12 +28,20 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
+from openai._streaming import AsyncStream, ServerSentEvent
+from openai._client import AsyncOpenAI
+from openai._exceptions import APIError
+from openai._utils import is_mapping
+from typing import Any, TypeVar, Iterator, AsyncIterator, cast, Tuple
 
 from ..exceptions import OpenAIError
 from .core_helpers import map_finish_reason, process_response_headers
 from .exception_mapping_utils import exception_type
 from .llm_response_utils.get_api_base import get_api_base
 from .rules import Rules
+
+_T = TypeVar("_T")
+
 
 # Constants for special delta attribute names
 AUDIO_ATTRIBUTE = "audio"
@@ -63,6 +71,97 @@ def print_verbose(print_statement):
         pass
 
 
+class CustomAsyncStream(AsyncStream[Tuple[Any, _T]]):
+    """
+    Custom implementation of an asynchronous stream response. Extends [AsyncStream](https://github.com/openai/openai-python/blob/7aa3c787b99adf9b93f0652aacafa1200c681877/src/openai/_streaming.py#L123) to return raw SSE data together with processed data.
+    """
+
+    def __init__(
+        self,
+        *,
+        cast_to: type[_T],
+        response: httpx.Response,
+        client: AsyncOpenAI,
+    ) -> None:
+        self.response = response
+        self._cast_to = cast_to
+        self._client = client
+        self._decoder = client._make_sse_decoder()
+        self._iterator = self.__stream__()
+
+    @staticmethod
+    def from_async_stream(
+        stream: AsyncStream[_T],
+    ):
+        return CustomAsyncStream(
+            cast_to=stream._cast_to,
+            response=stream.response,
+            client=stream._client,
+        )
+
+    async def __anext__(self) -> Tuple[Any, _T]:
+        return await self._iterator.__anext__()
+
+    def __aiter__(self) -> AsyncIterator[Tuple[Any, _T]]:
+        return self
+
+    async def _iter_events(self) -> AsyncIterator[ServerSentEvent]:
+        async for sse in self._decoder.aiter_bytes(self.response.aiter_bytes()):
+            yield sse
+
+    async def __stream__(self) -> AsyncIterator[Tuple[Any, _T]]:
+        cast_to = cast(Any, self._cast_to)
+        response = self.response
+        process_data = self._client._process_response_data
+        iterator = self._iter_events()
+
+        async for sse in iterator:
+            if sse.data.startswith("[DONE]"):
+                break
+
+            # we have to special case the Assistants `thread.` events since we won't have an "event" key in the data
+            if sse.event and sse.event.startswith("thread."):
+                data = sse.json()
+
+                if sse.event == "error" and is_mapping(data) and data.get("error"):
+                    message = None
+                    error = data.get("error")
+                    if is_mapping(error):
+                        message = error.get("message")
+                    if not message or not isinstance(message, str):
+                        message = "An error occurred during streaming"
+
+                    raise APIError(
+                        message=message,
+                        request=self.response.request,
+                        body=data["error"],
+                    )
+
+                yield (sse.data, process_data(data={"data": data, "event": sse.event}, cast_to=cast_to, response=response))
+            else:
+                data = sse.json()
+                if is_mapping(data) and data.get("error"):
+                    message = None
+                    error = data.get("error")
+                    if is_mapping(error):
+                        message = error.get("message")
+                    if not message or not isinstance(message, str):
+                        message = "An error occurred during streaming"
+
+                    raise APIError(
+                        message=message,
+                        request=self.response.request,
+                        body=data["error"],
+                    )
+
+                yield (sse.data, process_data(data=data, cast_to=cast_to, response=response))
+
+        # Ensure the entire stream is consumed
+        async for _sse in iterator:
+            ...
+
+
+
 class CustomStreamWrapper:
     def __init__(
         self,
@@ -78,7 +177,9 @@ class CustomStreamWrapper:
         self.make_call = make_call
         self.custom_llm_provider = custom_llm_provider
         self.logging_obj: LiteLLMLoggingObject = logging_obj
-        self.completion_stream = completion_stream
+        self.completion_stream = CustomAsyncStream.from_async_stream(
+            completion_stream
+        ) if isinstance(completion_stream, AsyncStream) else completion_stream
         self.sent_first_chunk = False
         self.sent_last_chunk = False
 
@@ -1603,6 +1704,7 @@ class CustomStreamWrapper:
                     chunk = self.completion_stream
                 else:
                     chunk = next(self.completion_stream)
+
                 if chunk is not None and chunk != b"":
                     print_verbose(
                         f"PROCESSED CHUNK PRE CHUNK CREATOR: {chunk}; custom_llm_provider: {self.custom_llm_provider}"
@@ -1761,7 +1863,14 @@ class CustomStreamWrapper:
                 await self.fetch_stream()
 
             if is_async_iterable(self.completion_stream):
-                async for chunk in self.completion_stream:
+                async for item in self.completion_stream:
+                    if isinstance(item, tuple):
+                        if len(item) == 2:
+                            raw_chunk, chunk = item
+                        else:
+                            raw_chunk, chunk = None, item[0]
+                    else:
+                        raw_chunk, chunk = None, item
                     if chunk == "None" or chunk is None:
                         continue  # skip None chunks
 
@@ -1784,7 +1893,11 @@ class CustomStreamWrapper:
                         f"PROCESSED ASYNC CHUNK POST CHUNK CREATOR: {processed_chunk}"
                     )
                     if processed_chunk is None:
-                        continue
+                        # return raw chunk even if the processed chunk is empty
+                        if raw_chunk is not None:
+                            return raw_chunk
+                        else:
+                            continue
 
                     if self.logging_obj.completion_start_time is None:
                         self.logging_obj._update_completion_start_time(
@@ -1815,7 +1928,6 @@ class CustomStreamWrapper:
                         is_empty = is_model_response_stream_empty(
                             model_response=cast(ModelResponseStream, processed_chunk)
                         )
-
                         if is_empty:
                             continue
                     print_verbose(f"final returned processed chunk: {processed_chunk}")
@@ -1824,7 +1936,7 @@ class CustomStreamWrapper:
                     if self.sent_last_chunk is True and self.stream_options is None:
                         usage = calculate_total_usage(chunks=self.chunks)
                         processed_chunk._hidden_params["usage"] = usage
-                    return processed_chunk
+                    return raw_chunk
                 raise StopAsyncIteration
             else:  # temporary patch for non-aiohttp async calls
                 # example - boto3 bedrock llms
@@ -1858,6 +1970,7 @@ class CustomStreamWrapper:
                         )
                         # RETURN RESULT
                         self.chunks.append(processed_chunk)
+                        # We don't need to return the raw chunk since we only fix response hash for async streaming
                         return processed_chunk
         except (StopAsyncIteration, StopIteration):
             if self.sent_last_chunk is True:
@@ -1904,11 +2017,12 @@ class CustomStreamWrapper:
                     end_time=None,
                 )
 
-                raise StopAsyncIteration  # Re-raise StopIteration
-            else:
-                self.sent_last_chunk = True
-                processed_chunk = self.finish_reason_handler()
-                return processed_chunk
+            raise StopAsyncIteration  # Re-raise StopIteration
+            # else:
+                ## SKIP: now we return the raw last chunk instead
+                # self.sent_last_chunk = True
+                # processed_chunk = self.finish_reason_handler()
+                # return processed_chunk
         except httpx.TimeoutException as e:  # if httpx read timeout error occues
             traceback_exception = traceback.format_exc()
             ## ADD DEBUG INFORMATION - E.G. LITELLM REQUEST TIMEOUT

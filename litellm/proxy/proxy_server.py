@@ -3115,7 +3115,8 @@ class ProxyConfig:
                     guardrail=cast(Guardrail, guardrail),
                 )
         except Exception as e:
-            verbose_proxy_logger.exception(
+            # ignore guardrail initialization errors for now
+            verbose_proxy_logger.debug(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(
                     str(e)
                 )
@@ -4110,7 +4111,24 @@ async def chat_completion(  # noqa: PLR0915
             user_api_base=user_api_base,
             version=version,
         )
-        if isinstance(result, BaseModel):
+        if isinstance(result, ModelResponse):
+            hidden_params = (
+                getattr(result, "_hidden_params", {}) or {}
+            )
+            raw_response_text = hidden_params.get("raw_response_text", None)
+            if raw_response_text is not None:
+                try:
+                    return json.loads(raw_response_text)
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail={
+                            "error": f"Invalid raw response from model: {raw_response_text}"
+                        },
+                    ) from e
+            else:
+                return result.model_dump(exclude_none=True, exclude_unset=True)
+        elif isinstance(result, BaseModel):
             return result.model_dump(exclude_none=True, exclude_unset=True)
         else:
             return result
